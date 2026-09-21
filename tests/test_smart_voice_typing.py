@@ -32,8 +32,23 @@ class SmartVoiceTypingTests(unittest.TestCase):
 
     def test_logs_do_not_include_transcribed_or_prompt_content(self):
         source = Path(app.__file__).read_text(encoding="utf-8")
-        self.assertNotIn('F8 (Gốc):', source)
-        self.assertNotIn('AI đang xử lý:', source)
+        self.assertNotIn('log_message(f"F8 (Gốc):', source)
+        self.assertNotIn('log_message(f"AI đang xử lý:', source)
+
+    def test_legacy_log_sanitizer_removes_only_sensitive_entries(self):
+        log_file = Path(TEST_DATA_ROOT.name) / "legacy.log"
+        log_file.write_text(
+            "INFO startup ok\nINFO F8 (Gốc): 'bí mật'\nERROR network failed\n",
+            encoding="utf-8",
+        )
+
+        removed = app.sanitize_legacy_logs(log_file)
+
+        self.assertEqual(removed, 1)
+        sanitized = log_file.read_text(encoding="utf-8")
+        self.assertIn("startup ok", sanitized)
+        self.assertIn("network failed", sanitized)
+        self.assertNotIn("bí mật", sanitized)
 
     def test_dpapi_round_trip(self):
         encrypted = app.protect_secret("test-secret")

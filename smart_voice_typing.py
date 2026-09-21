@@ -140,6 +140,38 @@ def setup_logging() -> None:
     root_logger.addHandler(handler)
 
 
+def sanitize_legacy_logs(log_file: Path = LOG_FILE) -> int:
+    """Loại các dòng phiên bản cũ từng ghi nguyên văn lời nói/prompt."""
+    sensitive_markers = ("F8 (Gốc):", "AI đang xử lý:", "Hallucination detected & filtered:")
+    removed = 0
+    for candidate in [log_file, *(Path(f"{log_file}.{index}") for index in range(1, 4))]:
+        if not candidate.is_file():
+            continue
+        try:
+            original_lines = candidate.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+            safe_lines = [line for line in original_lines if not any(marker in line for marker in sensitive_markers)]
+            removed_here = len(original_lines) - len(safe_lines)
+            if removed_here:
+                fd, tmp_name = tempfile.mkstemp(prefix=f".{candidate.name}.", suffix=".tmp", dir=candidate.parent)
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8", newline="") as stream:
+                        stream.writelines(safe_lines)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    os.replace(tmp_name, candidate)
+                except Exception:
+                    try:
+                        os.unlink(tmp_name)
+                    except OSError:
+                        pass
+                    raise
+                removed += removed_here
+        except OSError:
+            # Không cản startup nếu antivirus hoặc tiến trình cũ đang giữ file.
+            continue
+    return removed
+
+
 def log_message(message: str, level: int = logging.INFO) -> None:
     logging.log(level, message)
     try:
@@ -1873,6 +1905,7 @@ def ensure_single_instance() -> bool:
 if __name__ == "__main__":
     if sys.platform != "win32": sys.exit()
     APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    sanitize_legacy_logs()
     setup_logging()
     if not ensure_single_instance():
         sys.exit(0)

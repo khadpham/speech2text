@@ -63,7 +63,7 @@ CONFIG_FILE = APP_DATA_DIR / "app_settings.json"
 LOG_FILE = APP_DATA_DIR / "smart_voice_ai.log"
 
 DEFAULT_CONFIG = {
-    "config_version": 2,
+    "config_version": 3,
     "api_key": "",
     "api_key_encrypted": "",
     "transcription_model": "whisper-large-v3",
@@ -78,6 +78,7 @@ DEFAULT_CONFIG = {
     "hotkey_f9": "ctrl+alt+f9",
     "vad_enabled": True,
     "vad_silence_limit": 2.0,
+    "max_recording_seconds": 300.0,
     "enable_tts": False,
     "smart_punctuation": False, # Mặc định tắt để đảm bảo tốc độ
     "translation_mode": "Tắt",
@@ -271,12 +272,15 @@ def load_settings():
                 loaded = json.load(f)
                 if not isinstance(loaded, dict):
                     raise ValueError("Cấu hình phải là một JSON object")
-                if int(loaded.get("config_version", 1) or 1) < 2:
+                config_version = int(loaded.get("config_version", 1) or 1)
+                if config_version < 2:
                     if loaded.get("hotkey_f8") in {"f8", "ctrl+f8"}:
                         loaded["hotkey_f8"] = "ctrl+alt+f8"
                     if loaded.get("hotkey_f9") in {"f9", "ctrl+f9"}:
                         loaded["hotkey_f9"] = "ctrl+alt+f9"
-                    loaded["config_version"] = 2
+                if config_version < 3:
+                    loaded["max_recording_seconds"] = DEFAULT_CONFIG["max_recording_seconds"]
+                    loaded["config_version"] = 3
                     needs_persist = True
                 state.config.update(loaded)
             log_message("Đã tải cài đặt từ file.")
@@ -823,6 +827,11 @@ class MainDashboard(tk.Toplevel):
         self.trans_combo = ttk.Combobox(f_feat, textvariable=self.trans_mode_var, values=["Tắt", "Việt -> Anh", "Anh -> Việt"], width=15, state="readonly")
         self.trans_combo.grid(row=3, column=1, columnspan=2, sticky='w', padx=5, pady=5)
 
+        lbl(f_feat, "Tối đa ghi (giây):").grid(row=4, column=0, sticky='w', padx=10, pady=5)
+        self.max_recording_entry = tk.Entry(f_feat, width=8, bg='#313244', fg='white', borderwidth=1)
+        self.max_recording_entry.insert(0, str(state.config.get("max_recording_seconds", 300.0)))
+        self.max_recording_entry.grid(row=4, column=1, columnspan=2, sticky='w', padx=5, pady=5)
+
         # Hotkeys
         f_keys = tk.LabelFrame(self.tab_general, text=" Phím tắt ", bg='#1e1e2e', fg='#a6adc8', font=('Segoe UI', 10, 'bold'))
         f_keys.pack(fill='x', pady=10)
@@ -957,6 +966,13 @@ class MainDashboard(tk.Toplevel):
         except ValueError:
             messagebox.showerror("Cấu hình không hợp lệ", "Thời gian VAD phải từ 0.5 đến 30 giây.")
             return
+        try:
+            max_recording_seconds = float(self.max_recording_entry.get().strip())
+            if not 10 <= max_recording_seconds <= 600:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("Cấu hình không hợp lệ", "Thời gian ghi tối đa phải từ 10 đến 600 giây.")
+            return
 
         state.config["api_key"] = api_key
         state.config["language"] = language
@@ -968,6 +984,7 @@ class MainDashboard(tk.Toplevel):
         state.config["smart_punctuation"] = self.smart_punc_var.get()
         state.config["translation_mode"] = self.trans_mode_var.get()
         state.config["vad_silence_limit"] = vad_limit
+        state.config["max_recording_seconds"] = max_recording_seconds
         
         sel = self.tpl_listbox.curselection()
         if sel:
@@ -1316,6 +1333,12 @@ def _on_global_hotkey(is_ai: bool) -> None:
         state.hotkey_queue.put(is_ai)
 
 
+def recording_limit_reached(started_at: float, limit_seconds: float, now: Optional[float] = None) -> bool:
+    """Trả về True khi phiên ghi âm đã đạt giới hạn cấu hình."""
+    current = time.monotonic() if now is None else now
+    return current - started_at >= max(1.0, float(limit_seconds))
+
+
 def parse_windows_hotkey(value: str) -> tuple[int, int]:
     parts = [part.strip().lower() for part in value.split("+") if part.strip()]
     if not parts:
@@ -1409,6 +1432,11 @@ def voice_listener():
         active_chunks = []
         last_voice_time = time.time()
         vad_limit = state.config.get("vad_silence_limit", 1.5) if state.config.get("vad_enabled", True) else 9999
+        max_recording_seconds = float(state.config.get("max_recording_seconds", 300.0))
+        recording_started = time.monotonic()
+        detected_voice = False
+        overflow_reported = False
+        reached_recording_limit = False
         
         try:
             with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype='int16') as stream:
@@ -1417,7 +1445,7 @@ def voice_listener():
                 # Hàm check âm lượng & cập nhật UI
                 noise_floor = thresh
                 def _process_frame(data):
-                    nonlocal last_voice_time, noise_floor
+                    nonlocal last_voice_time, noise_floor, detected_voice
                     vol = int(np.max(np.abs(data.astype(np.int32))))
                     
                     # Cập nhật mức ồn nền tĩnh (Noise Floor)
@@ -1429,6 +1457,7 @@ def voice_listener():
                         state.status_window.update_meter(min(1.0, vol / 5000))
                     
                     if vol > dynamic_thresh:
+                        detected_voice = True
                         last_voice_time = time.time()
                         return True
                     return False
@@ -1441,7 +1470,10 @@ def voice_listener():
                     pre_roll = deque(maxlen=13)  # Khoảng 0.4 giây để không mất âm đầu.
                     heard_speech = False
                     while state.is_recording:
-                        data, _ = stream.read(512)
+                        data, overflowed = stream.read(512)
+                        if overflowed and not overflow_reported:
+                            log_message("Âm thanh: input overflow, một phần mẫu có thể bị mất.", logging.WARNING)
+                            overflow_reported = True
                         is_voice = _process_frame(data)
                         if not heard_speech:
                             pre_roll.append(data.copy())
@@ -1457,16 +1489,28 @@ def voice_listener():
                         if time.time() - last_voice_time > vad_limit:
                             log_message("VAD: Tự động ngắt do im lặng.")
                             state.is_recording = False
+
+                        if recording_limit_reached(recording_started, max_recording_seconds):
+                            reached_recording_limit = True
+                            log_message(f"Ghi âm: tự động dừng tại giới hạn {max_recording_seconds:g} giây.")
+                            state.is_recording = False
                         
                         # Dừng bằng phím Esc hoặc phím tắt
                         if keyboard.is_pressed('esc') or keyboard.is_pressed(key): 
                             state.is_recording = False
                 else:
                     while keyboard.is_pressed(key):
-                        data, _ = stream.read(512)
+                        data, overflowed = stream.read(512)
+                        if overflowed and not overflow_reported:
+                            log_message("Âm thanh: input overflow, một phần mẫu có thể bị mất.", logging.WARNING)
+                            overflow_reported = True
                         _process_frame(data)
                         active_chunks.append(data.copy())
                         if keyboard.is_pressed('esc'): break
+                        if recording_limit_reached(recording_started, max_recording_seconds):
+                            reached_recording_limit = True
+                            log_message(f"Ghi âm: tự động dừng tại giới hạn {max_recording_seconds:g} giây.")
+                            break
                     state.is_recording = False
         except Exception as e:
             logging.exception("Lỗi âm thanh")
@@ -1474,6 +1518,20 @@ def voice_listener():
             state.is_recording = False
             
         play_sound("end")
+
+        if reached_recording_limit and state.status_window:
+            state.status_window.show(
+                f"■ ĐÃ DỪNG Ở GIỚI HẠN {max_recording_seconds:g} GIÂY",
+                "#f9e2af"
+            )
+            threading.Timer(3.0, state.status_window.hide).start()
+
+        if not detected_voice:
+            active_chunks = []
+            if state.status_window:
+                state.status_window.show("⚠ KHÔNG NGHE THẤY GIỌNG NÓI", "#ff4b4b")
+                threading.Timer(3.0, state.status_window.hide).start()
+            log_message("Ghi âm: không phát hiện giọng nói, không gửi API.")
         
         if active_chunks:
             audio_data = np.concatenate(active_chunks, axis=0)

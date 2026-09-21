@@ -10,7 +10,7 @@ liệu hoặc sai hành vi được làm trước tính năng mới.
 |---:|---|---:|---:|---:|---:|---|
 | 1 | Làm cho Dịch/Thêm dấu câu của F8 thực sự hoạt động | 5 | 5 | 5 | 5 | Hoàn thành: unit test, clean build và startup smoke test |
 | 2 | Không ghi nguyên văn lời nói và prompt vào log mặc định | 5 | 5 | 5 | 5 | Hoàn thành |
-| 3 | Giới hạn thời lượng/kích thước ghi âm và báo khi không có tiếng nói | 5 | 5 | 5 | 4 | Chưa làm |
+| 3 | Giới hạn thời lượng/kích thước ghi âm và báo khi không có tiếng nói | 5 | 5 | 5 | 4 | Hoàn thành |
 | 4 | Dán đúng cửa sổ bắt đầu và bảo toàn đầy đủ clipboard | 5 | 4 | 5 | 2 | Chưa làm |
 | 5 | Phân loại lỗi API/mic/hotkey, hướng dẫn người dùng cách khắc phục | 4 | 5 | 5 | 4 | Chưa làm |
 | 6 | Chờ nhả tổ hợp F9 trước khi gửi Ctrl+C lấy selection | 4 | 5 | 5 | 4 | Chưa làm |

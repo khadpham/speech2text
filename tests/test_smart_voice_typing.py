@@ -67,6 +67,10 @@ class SmartVoiceTypingTests(unittest.TestCase):
         self.assertTrue(app.is_valid_hotkey("ctrl+f8"))
         self.assertFalse(app.is_valid_hotkey("not-a-real-key"))
 
+    def test_recording_limit_uses_monotonic_elapsed_time(self):
+        self.assertFalse(app.recording_limit_reached(100.0, 300.0, now=399.99))
+        self.assertTrue(app.recording_limit_reached(100.0, 300.0, now=400.0))
+
     def make_api(self, transcription="xin chào", completion="Hello."):
         transcriptions = mock.Mock()
         transcriptions.create.return_value = transcription

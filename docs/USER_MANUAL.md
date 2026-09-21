@@ -40,6 +40,8 @@ API key được mã hóa bằng Windows DPAPI và lưu tại
 - **Rảnh tay:** nhấn một lần để bắt đầu; VAD tự dừng khi im lặng.
 - **Nhấn giữ:** giữ hotkey trong khi nói và thả để kết thúc.
 - Có thể đổi hai hotkey trong Dashboard. Hai tổ hợp phải khác nhau.
+- Mỗi lần ghi mặc định tối đa 300 giây. Có thể đặt từ 10 đến 600 giây tại
+  **CÀI ĐẶT → Tối đa ghi**. Khi không phát hiện giọng nói, app không gửi API.
 
 ## 5. Xử lý sự cố nhanh
 

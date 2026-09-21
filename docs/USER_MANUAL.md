@@ -19,6 +19,10 @@ API key được mã hóa bằng Windows DPAPI và lưu tại
    `Ctrl+Alt+F8`.
 5. Chờ trạng thái **ĐANG XỬ LÝ** kết thúc. Văn bản sẽ được dán tại vị trí con trỏ.
 
+Ứng dụng ghi Unicode trực tiếp và không dùng clipboard để dán kết quả. Nếu bạn
+đổi sang cửa sổ khác trong lúc chờ API, app sẽ không dán nhầm: kết quả được giữ
+trong **Dashboard → Kết quả gần nhất**, nơi bạn có thể chủ động sao chép.
+
 ### Các chế độ F8
 
 - **Chép lời nguyên bản:** tắt Dịch và tắt AI thêm dấu câu. Chế độ này nhanh nhất.
@@ -33,6 +37,8 @@ API key được mã hóa bằng Windows DPAPI và lưu tại
 - Không chọn văn bản: nhấn `Ctrl+Alt+F9` và nói yêu cầu trực tiếp.
 - Có chọn văn bản: bôi đen đoạn cần xử lý, nhấn `Ctrl+Alt+F9`, rồi nói yêu cầu
   như “viết lại trang trọng hơn” hoặc “tóm tắt đoạn này”.
+- Khi đọc văn bản đang chọn, ứng dụng giữ và khôi phục nguyên clipboard OLE cũ,
+  bao gồm các định dạng không phải text khi ứng dụng nguồn hỗ trợ.
 - Có thể dừng bằng `Esc` hoặc nhấn lại hotkey.
 
 ## 4. Chế độ ghi âm

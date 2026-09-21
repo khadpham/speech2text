@@ -21,6 +21,8 @@ class SmartVoiceTypingTests(unittest.TestCase):
         app.state.used_requests = 0
         app.state.hourly_seconds = {}
         app.state.minute_requests = []
+        app.state.last_result = ""
+        app.state.ui_queue = app.queue.Queue()
 
     def test_source_and_default_config_do_not_contain_groq_key(self):
         source = Path(app.__file__).read_text(encoding="utf-8")
@@ -105,7 +107,7 @@ class SmartVoiceTypingTests(unittest.TestCase):
 
         check_limits.assert_called_once_with(1.0, 1)
         completions.create.assert_not_called()
-        paste_text.assert_called_once_with("xin chào")
+        paste_text.assert_called_once_with("xin chào", None)
 
     def test_f8_translation_setting_is_applied(self):
         app.state.config["translation_mode"] = "Việt -> Anh"
@@ -115,7 +117,7 @@ class SmartVoiceTypingTests(unittest.TestCase):
 
         check_limits.assert_called_once_with(1.0, 2)
         completions.create.assert_called_once()
-        paste_text.assert_called_once_with("Hello.")
+        paste_text.assert_called_once_with("Hello.", None)
 
     def test_f8_smart_punctuation_setting_is_applied(self):
         app.state.config["smart_punctuation"] = True
@@ -125,7 +127,47 @@ class SmartVoiceTypingTests(unittest.TestCase):
 
         check_limits.assert_called_once_with(1.0, 2)
         completions.create.assert_called_once()
-        paste_text.assert_called_once_with("Xin chào.")
+        paste_text.assert_called_once_with("Xin chào.", None)
+
+    @mock.patch.object(app, "send_unicode_text")
+    @mock.patch.object(app.win32gui, "IsWindow", return_value=True)
+    @mock.patch.object(app.win32gui, "GetForegroundWindow", return_value=123)
+    def test_text_delivery_types_only_into_original_window(self, _foreground, _is_window, send_text):
+        delivered = app.clipboard_manager.paste_text("Kết quả", target_hwnd=123)
+
+        self.assertTrue(delivered)
+        self.assertEqual(app.state.last_result, "Kết quả")
+        send_text.assert_called_once_with("Kết quả")
+
+    @mock.patch.object(app, "send_unicode_text")
+    @mock.patch.object(app.win32gui, "IsWindow", return_value=True)
+    @mock.patch.object(app.win32gui, "GetForegroundWindow", return_value=456)
+    def test_text_delivery_keeps_result_when_focus_changed(self, _foreground, _is_window, send_text):
+        delivered = app.clipboard_manager.paste_text("Kết quả", target_hwnd=123)
+
+        self.assertFalse(delivered)
+        self.assertEqual(app.state.last_result, "Kết quả")
+        send_text.assert_not_called()
+
+    def test_selected_text_restores_original_ole_clipboard(self):
+        old_clipboard = object()
+        with (
+            mock.patch.object(app.pythoncom, "CoInitialize"),
+            mock.patch.object(app.pythoncom, "CoUninitialize"),
+            mock.patch.object(app.pythoncom, "OleGetClipboard", return_value=old_clipboard),
+            mock.patch.object(app.pythoncom, "OleSetClipboard") as restore_clipboard,
+            mock.patch.object(app.win32clipboard, "GetClipboardSequenceNumber", side_effect=[10, 11]),
+            mock.patch.object(app.keyboard, "send"),
+            mock.patch.object(app.pyperclip, "paste", return_value="đoạn được chọn"),
+        ):
+            selected = app.get_selected_text()
+
+        self.assertEqual(selected, "đoạn được chọn")
+        restore_clipboard.assert_called_once_with(old_clipboard)
+
+    def test_wait_for_hotkey_release(self):
+        with mock.patch.object(app.keyboard, "is_pressed", side_effect=[True, False]):
+            self.assertTrue(app.wait_for_hotkey_release("ctrl+alt+f9", timeout=1.0))
 
 
 if __name__ == "__main__":

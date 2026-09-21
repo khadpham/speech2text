@@ -29,7 +29,9 @@ import ctypes
 from ctypes import wintypes
 import win32gui # Lấy thông tin cửa sổ Windows
 import win32crypt
+import win32clipboard
 import winreg
+import pythoncom
 import re
 import webbrowser
 import pyttsx3
@@ -117,6 +119,7 @@ class AppState:
         self.last_hotkey_time: Dict[str, float] = {}
         self.hotkey_thread: Optional[threading.Thread] = None
         self.hotkey_thread_id: Optional[int] = None
+        self.last_result: str = ""
 
 state = AppState()
 
@@ -413,33 +416,98 @@ def update_tooltip():
         except Exception:
             pass
 
-# ================= QUẢN LÝ CLIPBOARD AN TOÀN =================
-class ClipboardQueue:
+# ================= NHẬP VĂN BẢN KHÔNG PHÁ CLIPBOARD =================
+ULONG_PTR = ctypes.c_ulonglong if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_ulong
+
+
+class MOUSEINPUT(ctypes.Structure):
+    _fields_ = [
+        ("dx", wintypes.LONG), ("dy", wintypes.LONG), ("mouseData", wintypes.DWORD),
+        ("dwFlags", wintypes.DWORD), ("time", wintypes.DWORD), ("dwExtraInfo", ULONG_PTR),
+    ]
+
+
+class KEYBDINPUT(ctypes.Structure):
+    _fields_ = [
+        ("wVk", wintypes.WORD), ("wScan", wintypes.WORD),
+        ("dwFlags", wintypes.DWORD), ("time", wintypes.DWORD), ("dwExtraInfo", ULONG_PTR),
+    ]
+
+
+class HARDWAREINPUT(ctypes.Structure):
+    _fields_ = [("uMsg", wintypes.DWORD), ("wParamL", wintypes.WORD), ("wParamH", wintypes.WORD)]
+
+
+class INPUT_UNION(ctypes.Union):
+    _fields_ = [("mi", MOUSEINPUT), ("ki", KEYBDINPUT), ("hi", HARDWAREINPUT)]
+
+
+class INPUT(ctypes.Structure):
+    _anonymous_ = ("data",)
+    _fields_ = [("type", wintypes.DWORD), ("data", INPUT_UNION)]
+
+
+def _keyboard_input(virtual_key: int = 0, scan_code: int = 0, flags: int = 0) -> INPUT:
+    return INPUT(type=1, ki=KEYBDINPUT(virtual_key, scan_code, flags, 0, 0))
+
+
+def send_unicode_text(text: str) -> None:
+    """Nhập Unicode bằng SendInput, không thay đổi clipboard của người dùng."""
+    events: List[INPUT] = []
+    for char in text.replace("\r\n", "\n"):
+        if char == "\r":
+            continue
+        if char == "\n":
+            events.extend((_keyboard_input(0x0D), _keyboard_input(0x0D, flags=0x0002)))
+            continue
+        for index in range(0, len(char.encode("utf-16-le")), 2):
+            unit = int.from_bytes(char.encode("utf-16-le")[index:index + 2], "little")
+            events.extend((
+                _keyboard_input(scan_code=unit, flags=0x0004),
+                _keyboard_input(scan_code=unit, flags=0x0004 | 0x0002),
+            ))
+
+    user32 = ctypes.windll.user32
+    for offset in range(0, len(events), 400):
+        batch = events[offset:offset + 400]
+        array_type = INPUT * len(batch)
+        sent = user32.SendInput(len(batch), array_type(*batch), ctypes.sizeof(INPUT))
+        if sent != len(batch):
+            raise ctypes.WinError()
+
+
+def refresh_last_result_view() -> None:
+    if state.dashboard_window and state.dashboard_window.winfo_exists():
+        state.dashboard_window.update_last_result()
+
+
+class TextDelivery:
     def __init__(self):
         self.lock = threading.Lock()
 
-    def paste_text(self, text: str):
-        """Gõ văn bản mà không làm mất dữ liệu clipboard cũ của người dùng."""
-        def _task():
-            with self.lock:
-                old_clip = None
-                try:
-                    old_clip = str(pyperclip.paste())
-                    pyperclip.copy(text)
-                    time.sleep(0.08) # Đợi clipboard hệ thống cập nhật
-                    keyboard.send('ctrl+v')
-                    time.sleep(0.4) # Đợi ứng dụng nhận lệnh dán
-                except Exception:
-                    logging.exception("Không thể dán hoặc khôi phục clipboard")
-                finally:
-                    if old_clip is not None:
-                        try:
-                            pyperclip.copy(old_clip)
-                        except Exception:
-                            logging.exception("Không thể khôi phục clipboard")
-        threading.Thread(target=_task, daemon=True).start()
+    def paste_text(self, text: str, target_hwnd: Optional[int] = None) -> bool:
+        """Nhập vào đúng cửa sổ đã bắt đầu tác vụ; nếu focus đổi thì giữ kết quả lại."""
+        state.last_result = text
+        post_ui(refresh_last_result_view)
+        with self.lock:
+            current_hwnd = int(win32gui.GetForegroundWindow() or 0)
+            expected_hwnd = int(target_hwnd or current_hwnd)
+            if not expected_hwnd or not win32gui.IsWindow(expected_hwnd) or current_hwnd != expected_hwnd:
+                log_message("Kết quả đã giữ lại vì cửa sổ đích không còn được focus.", logging.WARNING)
+                if state.status_window:
+                    state.status_window.show("⚠ KẾT QUẢ ĐÃ LƯU — MỞ DASHBOARD ĐỂ XEM", "#f9e2af")
+                return False
+            try:
+                send_unicode_text(text)
+                return True
+            except Exception:
+                logging.exception("Không thể nhập Unicode vào cửa sổ đích")
+                if state.status_window:
+                    state.status_window.show("⚠ KHÔNG THỂ NHẬP — KẾT QUẢ ĐÃ LƯU", "#ff4b4b")
+                return False
 
-clipboard_manager = ClipboardQueue()
+
+clipboard_manager = TextDelivery()
 
 # ================= ÂM THANH PHẢN HỒI =================
 def play_sound(event_type):
@@ -746,6 +814,7 @@ class MainDashboard(tk.Toplevel):
              
         # Update logs randomly by asking it to redraw
         self.update_log_list()
+        self.update_last_result()
 
     def update_log_list(self):
         if hasattr(self, 'log_listbox') and self.log_listbox.winfo_exists():
@@ -787,6 +856,31 @@ class MainDashboard(tk.Toplevel):
         self.log_listbox = tk.Listbox(log_frame, font=('Segoe UI', 10), bg='#181825', fg='#cdd6f4', borderwidth=0, selectbackground='#cba6f7', selectforeground='#1e1e2e')
         self.log_listbox.pack(fill='both', expand=True)
         self.update_log_list()
+
+        result_frame = tk.LabelFrame(self.tab_dash, text=" Kết quả gần nhất ", bg='#1e1e2e', fg='#a6adc8')
+        result_frame.pack(fill='x', pady=(5, 0))
+        self.last_result_text = scrolledtext.ScrolledText(
+            result_frame, height=4, bg='#181825', fg='#cdd6f4', borderwidth=0, font=('Segoe UI', 9)
+        )
+        self.last_result_text.pack(fill='x', padx=8, pady=6)
+        tk.Button(
+            result_frame, text="SAO CHÉP KẾT QUẢ", command=self.copy_last_result,
+            bg='#89b4fa', fg='#1e1e2e', borderwidth=0
+        ).pack(anchor='e', padx=8, pady=(0, 6))
+        self.update_last_result()
+
+    def update_last_result(self):
+        if not hasattr(self, 'last_result_text') or not self.last_result_text.winfo_exists():
+            return
+        self.last_result_text.delete('1.0', 'end')
+        self.last_result_text.insert('1.0', state.last_result)
+
+    def copy_last_result(self):
+        if not state.last_result:
+            messagebox.showinfo("Kết quả", "Chưa có kết quả nào trong phiên này.")
+            return
+        pyperclip.copy(state.last_result)
+        messagebox.showinfo("Kết quả", "Đã sao chép kết quả vào clipboard theo yêu cầu của bạn.")
 
     def setup_general_tab(self):
         def lbl(parent, txt):
@@ -1054,7 +1148,7 @@ def record_usage(duration: float, request_count: int) -> None:
     save_quota()
 
 # ================= XỬ LÝ ÂM THANH & API =================
-def process_audio(audio_data):
+def process_audio(audio_data, target_hwnd: Optional[int] = None):
     """Chuyển giọng nói F8 thành văn bản và áp dụng các cải tiến đã bật."""
     update_status("processing", "f8")
     audio_data = normalize_audio(audio_data)
@@ -1169,7 +1263,7 @@ TUYỆT ĐỐI GIỮ NGUYÊN 100% TỪ VỰNG CỦA NGƯỜI DÙNG, không đư�
             text = apply_glossary(raw_text)
             
             # Sử dụng Clipboard Manager mới
-            clipboard_manager.paste_text(text)
+            clipboard_manager.paste_text(text, target_hwnd)
             
     except Exception as e:
         logging.exception("Lỗi chuyển giọng nói thành văn bản")
@@ -1183,25 +1277,38 @@ TUYỆT ĐỐI GIỮ NGUYÊN 100% TỪ VỰNG CỦA NGƯỜI DÙNG, không đư�
         audio_buffer.close()
 
 def get_selected_text() -> str:
-    """Sao chép văn bản đang chọn vào clipboard và trả về nội dung đó."""
-    old_clip = None
+    """Đọc selection bằng clipboard OLE rồi khôi phục nguyên IDataObject cũ."""
+    old_clipboard = None
+    clipboard_changed = False
+    pythoncom.CoInitialize()
     try:
-        old_clip = pyperclip.paste()
-        pyperclip.copy("")
+        try:
+            old_clipboard = pythoncom.OleGetClipboard()
+        except pythoncom.com_error:
+            old_clipboard = None
+        previous_sequence = win32clipboard.GetClipboardSequenceNumber()
         keyboard.send('ctrl+c')
-        time.sleep(0.2)
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            if win32clipboard.GetClipboardSequenceNumber() != previous_sequence:
+                clipboard_changed = True
+                break
+            time.sleep(0.02)
+        if not clipboard_changed:
+            return ""
         return str(pyperclip.paste() or "")
     except Exception:
         logging.exception("Không thể đọc văn bản đang chọn")
         return ""
     finally:
-        if old_clip is not None:
+        if clipboard_changed and old_clipboard is not None:
             try:
-                pyperclip.copy(old_clip)
+                pythoncom.OleSetClipboard(old_clipboard)
             except Exception:
-                logging.exception("Không thể khôi phục clipboard sau Ctrl+C")
+                logging.exception("Không thể khôi phục IDataObject clipboard sau Ctrl+C")
+        pythoncom.CoUninitialize()
 
-def process_llm_task(audio_data, selected_text: str = ""):
+def process_llm_task(audio_data, selected_text: str = "", target_hwnd: Optional[int] = None):
     """Xử lý yêu cầu AI linh hoạt."""
     update_status("processing", "f9")
     audio_data = normalize_audio(audio_data)
@@ -1306,7 +1413,7 @@ Nếu không, chỉ trả về văn bản hồi đáp thông thường."""
                 state.llm_history.append({"role": "assistant", "content": result_text})
                 if len(state.llm_history) > 20:
                     state.llm_history = state.llm_history[-20:]
-                clipboard_manager.paste_text(result_text)
+                clipboard_manager.paste_text(result_text, target_hwnd)
                 speak_text(result_text)
             
     except Exception as e:
@@ -1330,7 +1437,18 @@ def _on_global_hotkey(is_ai: bool) -> None:
         state.is_recording = False
         return
     if not state.is_processing:
-        state.hotkey_queue.put(is_ai)
+        target_hwnd = int(win32gui.GetForegroundWindow() or 0)
+        state.hotkey_queue.put((is_ai, target_hwnd))
+
+
+def wait_for_hotkey_release(key: str, timeout: float = 2.0) -> bool:
+    """Chờ nhả tổ hợp để Ctrl/Alt không làm sai lệnh Ctrl+C hoặc ghi âm."""
+    deadline = time.monotonic() + timeout
+    while keyboard.is_pressed(key):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.02)
+    return True
 
 
 def recording_limit_reached(started_at: float, limit_seconds: float, now: Optional[float] = None) -> bool:
@@ -1407,9 +1525,14 @@ def voice_listener():
     log_message(f"Hệ thống sẵn sàng: {HOTKEY_F8} (Gõ phím), {HOTKEY_F9} (AI thông minh).")
     while state.app_running:
         try:
-            is_ai = state.hotkey_queue.get(timeout=0.5)
+            hotkey_event = state.hotkey_queue.get(timeout=0.5)
         except queue.Empty:
             continue
+
+        if isinstance(hotkey_event, tuple):
+            is_ai, target_hwnd = hotkey_event
+        else:
+            is_ai, target_hwnd = bool(hotkey_event), int(win32gui.GetForegroundWindow() or 0)
 
         key = HOTKEY_F9 if is_ai else HOTKEY_F8
 
@@ -1424,6 +1547,7 @@ def voice_listener():
         if state.is_recording or state.is_processing:
             continue
 
+        wait_for_hotkey_release(key)
         selected_text = str(get_selected_text()).strip() if is_ai else ""
         state.is_recording = True
         update_status("recording", key)
@@ -1536,7 +1660,7 @@ def voice_listener():
         if active_chunks:
             audio_data = np.concatenate(active_chunks, axis=0)
             worker = process_llm_task if is_ai else process_audio
-            args = (audio_data, selected_text) if is_ai else (audio_data,)
+            args = (audio_data, selected_text, target_hwnd) if is_ai else (audio_data, target_hwnd)
             state.is_processing = True
             threading.Thread(target=run_processing_task, args=(worker, *args), daemon=True).start()
         

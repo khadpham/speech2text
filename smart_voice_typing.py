@@ -1097,11 +1097,11 @@ def process_audio(audio_data):
         # Nếu chỉ có các từ rác này và độ dài ngắn, thì mới bỏ qua.
         # Không bỏ qua "cảm ơn" vì đây là câu nói bình thường của người dùng.
         if len(user_input) < 50 and any(h in user_input.lower() for h in hallucinations):
-            log_message(f"Hallucination detected & filtered: {user_input}")
+            log_message(f"F8: đã lọc kết quả nghi nhiễu ({len(user_input)} ký tự).")
             return
             
         raw_text = user_input
-        log_message(f"F8 (Gốc): '{raw_text}'")
+        log_message(f"F8: đã nhận bản chép lời ({len(raw_text)} ký tự).")
         
         if raw_text:
             # Dịch được ưu tiên nếu người dùng bật đồng thời cả dịch và dấu câu.
@@ -1239,7 +1239,10 @@ def process_llm_task(audio_data, selected_text: str = ""):
             return
 
         # 2. Chuẩn bị Messages cho LLM (có bao gồm lịch sử và ngữ cảnh)
-        log_message(f"AI đang xử lý: '{user_input}'" + (f" trên đoạn văn bản chọn sẵn" if selected_text else ""))
+        log_message(
+            f"F9: đang xử lý yêu cầu ({len(user_input)} ký tự, "
+            f"văn bản chọn={'có' if selected_text else 'không'})."
+        )
         
         context = get_active_window_context()
         base_system_prompt = state.config.get("ai_system_prompt", DEFAULT_CONFIG["ai_system_prompt"])

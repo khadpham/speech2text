@@ -27,6 +27,11 @@ class SmartVoiceTypingTests(unittest.TestCase):
         self.assertNotIn("gsk_", source)
         self.assertEqual(app.DEFAULT_CONFIG["api_key"], "")
 
+    def test_logs_do_not_include_transcribed_or_prompt_content(self):
+        source = Path(app.__file__).read_text(encoding="utf-8")
+        self.assertNotIn('F8 (Gốc):', source)
+        self.assertNotIn('AI đang xử lý:', source)
+
     def test_dpapi_round_trip(self):
         encrypted = app.protect_secret("test-secret")
         self.assertNotEqual(encrypted, "test-secret")

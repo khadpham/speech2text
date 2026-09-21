@@ -50,8 +50,9 @@ API key được mã hóa bằng Windows DPAPI và lưu tại
   Windows Settings.
 - **Kết quả chưa được dán:** không đổi cửa sổ khi ứng dụng đang xử lý. Cơ chế
   khóa đúng cửa sổ nhận kết quả nằm trong lộ trình sửa lỗi tiếp theo.
-- **Cần chẩn đoán:** xem `%LOCALAPPDATA%\SmartVoiceAI\smart_voice_ai.log`. Không
-  chia sẻ file log công khai trước khi kiểm tra dữ liệu riêng tư.
+- **Cần chẩn đoán:** xem `%LOCALAPPDATA%\SmartVoiceAI\smart_voice_ai.log`. Log mặc
+  định chỉ ghi trạng thái, độ dài và lỗi kỹ thuật, không ghi nguyên văn lời nói
+  hoặc prompt. Dù vậy vẫn nên kiểm tra trước khi chia sẻ công khai.
 
 ## 6. Thoát ứng dụng
 

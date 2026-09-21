@@ -33,6 +33,7 @@ from ctypes import wintypes
 import win32gui # Lấy thông tin cửa sổ Windows
 import win32crypt
 import win32clipboard
+import win32com.client
 import winreg
 import pythoncom
 import re
@@ -115,6 +116,7 @@ class AppState:
         self.glossary: Dict[str, str] = {}
         self.config: Dict[str, Any] = copy.deepcopy(DEFAULT_CONFIG)
         self.tts_engine: Optional[Any] = None
+        self.tts_available: Optional[bool] = None
         self.lock = threading.RLock()
         self.tts_lock = threading.Lock()
         self.ui_queue: queue.Queue = queue.Queue()
@@ -266,28 +268,68 @@ def process_ui_queue() -> None:
 
 # ================= HỖ TRỢ GIỌNG NÓI (TTS) =================
 def init_tts():
-    """Tạo engine trong đúng worker thread để COM/SAPI hoạt động ổn định."""
-    engine = pyttsx3.init()
-    voices = engine.getProperty('voices')
-    for voice in voices:
-        if "vietnam" in voice.name.lower():
-            engine.setProperty('voice', voice.id)
+    """Tạo Windows SAPI trực tiếp; ổn định hơn lớp comtypes của pyttsx3."""
+    voice = win32com.client.Dispatch("SAPI.SpVoice")
+    voices = voice.GetVoices()
+    for index in range(voices.Count):
+        token = voices.Item(index)
+        if "vietnam" in token.GetDescription().lower():
+            voice.Voice = token
             break
-    engine.setProperty('rate', 170)
-    return engine
+    voice.Rate = 0
+    return voice
+
+
+def tts_health_check() -> tuple[bool, str]:
+    """Kiểm tra SAPI, sau đó thử pyttsx3 như backend dự phòng."""
+    pythoncom.CoInitialize()
+    try:
+        voice = init_tts()
+        if voice.GetVoices().Count > 0:
+            return True, "Windows SAPI"
+    except Exception as sapi_error:
+        log_message(f"TTS health: SAPI {type(sapi_error).__name__}", logging.WARNING)
+    finally:
+        pythoncom.CoUninitialize()
+
+    try:
+        engine = pyttsx3.init()
+        voices = engine.getProperty('voices') or []
+        engine.stop()
+        if voices:
+            return True, "pyttsx3 fallback"
+    except Exception as fallback_error:
+        log_message(f"TTS health: fallback {type(fallback_error).__name__}", logging.WARNING)
+    return False, "Không tìm thấy giọng đọc Windows hoạt động"
 
 def speak_text(text: str):
     """Đọc văn bản nếu tính năng TTS được bật."""
-    if state.config.get("enable_tts", False):
+    if state.config.get("enable_tts", False) and state.tts_available is not False:
         def _speak():
             with state.tts_lock:
+                pythoncom.CoInitialize()
+                try:
+                    voice = init_tts()
+                    voice.Speak(text)
+                    state.tts_available = True
+                    return
+                except Exception as sapi_error:
+                    log_message(f"TTS SAPI: {type(sapi_error).__name__}; thử fallback.", logging.WARNING)
+                finally:
+                    pythoncom.CoUninitialize()
+
                 engine = None
                 try:
-                    engine = init_tts()
+                    engine = pyttsx3.init()
                     engine.say(text)
                     engine.runAndWait()
-                except Exception:
-                    logging.exception("Lỗi TTS")
+                    state.tts_available = True
+                except Exception as fallback_error:
+                    state.tts_available = False
+                    log_message(f"TTS fallback: {type(fallback_error).__name__}", logging.ERROR)
+                    if state.status_window:
+                        state.status_window.show("⚠ TTS KHÔNG KHẢ DỤNG — ĐÃ TẮT TRONG PHIÊN NÀY", "#ff4b4b")
+                        state.status_window.hide_after(4.0)
                 finally:
                     if engine:
                         try:
@@ -1131,7 +1173,19 @@ class MainDashboard(tk.Toplevel):
         state.config["hotkey_f8"] = hotkey_f8
         state.config["hotkey_f9"] = hotkey_f9
         state.config["vad_enabled"] = self.vad_var.get()
-        state.config["enable_tts"] = self.tts_var.get()
+        enable_tts = self.tts_var.get()
+        if enable_tts:
+            tts_ok, tts_backend = tts_health_check()
+            if not tts_ok:
+                messagebox.showwarning("TTS không khả dụng", f"{tts_backend}. TTS sẽ được tắt.")
+                enable_tts = False
+                self.tts_var.set(False)
+            else:
+                state.tts_available = True
+                log_message(f"TTS health check: {tts_backend} sẵn sàng.")
+        else:
+            state.tts_available = None
+        state.config["enable_tts"] = enable_tts
         state.config["smart_punctuation"] = self.smart_punc_var.get()
         state.config["translation_mode"] = self.trans_mode_var.get()
         state.config["vad_silence_limit"] = vad_limit

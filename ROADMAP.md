@@ -15,7 +15,7 @@ liệu hoặc sai hành vi được làm trước tính năng mới.
 | 5 | Phân loại lỗi API/mic/hotkey, hướng dẫn người dùng cách khắc phục | 4 | 5 | 5 | 4 | Hoàn thành |
 | 6 | Chờ nhả tổ hợp F9 trước khi gửi Ctrl+C lấy selection | 4 | 5 | 5 | 4 | Hoàn thành |
 | 7 | Loại bỏ race condition UI, timer và shutdown | 4 | 4 | 4 | 3 | Hoàn thành |
-| 8 | Health check và fallback cho TTS/SAPI | 3 | 4 | 3 | 3 | Chưa làm |
+| 8 | Health check và fallback cho TTS/SAPI | 3 | 4 | 3 | 3 | Hoàn thành |
 
 ## B. Cải tiến được xếp hạng
 

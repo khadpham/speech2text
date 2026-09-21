@@ -60,6 +60,9 @@ trong **Dashboard → Kết quả gần nhất**, nơi bạn có thể chủ đ�
   Dashboard để cập nhật key hoặc chọn model được cấp quyền.
 - **429/giới hạn Groq:** chờ theo hạn mức tài khoản rồi thử lại; app không coi
   đây là lỗi microphone.
+- **TTS không hoạt động:** khi bật TTS và lưu cài đặt, app kiểm tra Windows SAPI.
+  Nếu SAPI không dùng được, app thử pyttsx3; nếu cả hai lỗi thì TTS được tắt và
+  phần nhập liệu/AI vẫn tiếp tục hoạt động.
 - **Hotkey bị chiếm:** thông báo sẽ hiển thị Windows error và yêu cầu đóng ứng
   dụng dùng cùng tổ hợp hoặc đổi hotkey.
 - **Kết quả chưa được dán:** không đổi cửa sổ khi ứng dụng đang xử lý. Cơ chế

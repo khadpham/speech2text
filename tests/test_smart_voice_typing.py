@@ -186,6 +186,19 @@ class SmartVoiceTypingTests(unittest.TestCase):
         source = Path(app.__file__).read_text(encoding="utf-8")
         self.assertNotIn("threading.Timer", source)
 
+    def test_tts_health_uses_windows_sapi(self):
+        voices = SimpleNamespace(Count=1)
+        voice = SimpleNamespace(GetVoices=mock.Mock(return_value=voices))
+        with (
+            mock.patch.object(app.pythoncom, "CoInitialize"),
+            mock.patch.object(app.pythoncom, "CoUninitialize"),
+            mock.patch.object(app, "init_tts", return_value=voice),
+        ):
+            available, backend = app.tts_health_check()
+
+        self.assertTrue(available)
+        self.assertEqual(backend, "Windows SAPI")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1037,17 +1037,16 @@ def record_usage(duration: float, request_count: int) -> None:
     save_quota()
 
 # ================= XỬ LÝ ÂM THANH & API =================
-def process_audio(audio_data, is_raw=True):
-    """Xử lý âm thanh voice-to-text thông thường. Nếu is_raw=True, bỏ qua context và LLM."""
+def process_audio(audio_data):
+    """Chuyển giọng nói F8 thành văn bản và áp dụng các cải tiến đã bật."""
     update_status("processing", "f8")
     audio_data = normalize_audio(audio_data)
     duration = float(len(audio_data) / SAMPLE_RATE)
     if duration < 0.4: return
 
-    needs_second_request = not is_raw and (
-        state.config.get("translation_mode", "Tắt") != "Tắt"
-        or state.config.get("smart_punctuation", False)
-    )
+    translation_mode = state.config.get("translation_mode", "Tắt")
+    smart_punctuation = bool(state.config.get("smart_punctuation", False))
+    needs_second_request = translation_mode != "Tắt" or smart_punctuation
     can_proceed, msg = check_limits(duration, 2 if needs_second_request else 1)
     if not can_proceed:
         if state.status_window:
@@ -1056,12 +1055,11 @@ def process_audio(audio_data, is_raw=True):
         play_sound("error")
         return
 
-    # F8 tập trung vào độ chính xác thô (Raw Transcription)
-    if is_raw:
-        # Prompt cực kỳ đơn giản để tránh Whisper tự 'thông minh' hóa
+    # Khi không bật xử lý bổ sung, F8 giữ nguyên chế độ chép lời chính xác.
+    if not needs_second_request:
         dynamic_prompt = "Hãy chép chính xác từng từ tiếng Việt, bao gồm cả các thuật ngữ: code, data, app, API, AI, python."
     else:
-        # Nếu không phải raw (nhưng dùng function này) thì mới lấy context
+        # Dùng prompt giàu ngữ cảnh hơn khi kết quả sẽ được dịch hoặc chuẩn hóa dấu câu.
         context = get_active_window_context()
         base_prompt = state.config.get("transcription_prompt", DEFAULT_CONFIG["transcription_prompt"])
         dynamic_prompt = f"{base_prompt} Ngữ cảnh hiện tại: {context}."
@@ -1106,8 +1104,8 @@ def process_audio(audio_data, is_raw=True):
         log_message(f"F8 (Gốc): '{raw_text}'")
         
         if raw_text:
-            # 2. Xử lý Dịch thuật (chỉ thực hiện nếu KHÔNG đang ở chế độ Raw F8)
-            trans_mode = "Tắt" if is_raw else state.config.get("translation_mode", "Tắt")
+            # Dịch được ưu tiên nếu người dùng bật đồng thời cả dịch và dấu câu.
+            trans_mode = translation_mode
             if trans_mode != "Tắt":
                 try:
                     target_lang = "English" if "Anh" in trans_mode else "Vietnamese"
@@ -1128,8 +1126,8 @@ def process_audio(audio_data, is_raw=True):
                     logging.exception("Lỗi dịch")
                     log_message(f"Lỗi Dịch: {e}", logging.ERROR)
             
-            # 3. Xử lý thông minh (chỉ thực hiện nếu bật & KHÔNG đang ở chế độ Raw F8)
-            elif not is_raw and state.config.get("smart_punctuation", False):
+            # Nếu không dịch, có thể chuẩn hóa viết hoa và dấu câu bằng model nhanh.
+            elif smart_punctuation:
                 try:
                     context = get_active_window_context()
                     response = api.chat.completions.create(

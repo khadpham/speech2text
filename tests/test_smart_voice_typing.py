@@ -1,7 +1,9 @@
+import copy
 import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 
@@ -13,6 +15,7 @@ import smart_voice_typing as app
 
 class SmartVoiceTypingTests(unittest.TestCase):
     def setUp(self):
+        app.state.config = copy.deepcopy(app.DEFAULT_CONFIG)
         app.state.glossary = {}
         app.state.used_seconds = 0.0
         app.state.used_requests = 0
@@ -58,6 +61,62 @@ class SmartVoiceTypingTests(unittest.TestCase):
     def test_hotkey_validation(self):
         self.assertTrue(app.is_valid_hotkey("ctrl+f8"))
         self.assertFalse(app.is_valid_hotkey("not-a-real-key"))
+
+    def make_api(self, transcription="xin chào", completion="Hello."):
+        transcriptions = mock.Mock()
+        transcriptions.create.return_value = transcription
+        completions = mock.Mock()
+        completions.create.return_value = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=completion))]
+        )
+        api = SimpleNamespace(
+            audio=SimpleNamespace(transcriptions=transcriptions),
+            chat=SimpleNamespace(completions=completions),
+        )
+        return api, transcriptions, completions
+
+    def run_f8(self, api):
+        audio = app.np.full(app.SAMPLE_RATE, 1000, dtype=app.np.int16)
+        with (
+            mock.patch.object(app, "get_client", return_value=api),
+            mock.patch.object(app, "normalize_audio", side_effect=lambda value: value),
+            mock.patch.object(app, "check_limits", return_value=(True, "")) as check_limits,
+            mock.patch.object(app, "record_usage"),
+            mock.patch.object(app, "get_active_window_context", return_value="CƠ BẢN"),
+            mock.patch.object(app, "update_status"),
+            mock.patch.object(app.clipboard_manager, "paste_text") as paste_text,
+        ):
+            app.process_audio(audio)
+        return check_limits, paste_text
+
+    def test_f8_raw_mode_uses_one_request_and_skips_chat(self):
+        api, _transcriptions, completions = self.make_api(transcription="xin chào")
+
+        check_limits, paste_text = self.run_f8(api)
+
+        check_limits.assert_called_once_with(1.0, 1)
+        completions.create.assert_not_called()
+        paste_text.assert_called_once_with("xin chào")
+
+    def test_f8_translation_setting_is_applied(self):
+        app.state.config["translation_mode"] = "Việt -> Anh"
+        api, _transcriptions, completions = self.make_api(completion="Hello.")
+
+        check_limits, paste_text = self.run_f8(api)
+
+        check_limits.assert_called_once_with(1.0, 2)
+        completions.create.assert_called_once()
+        paste_text.assert_called_once_with("Hello.")
+
+    def test_f8_smart_punctuation_setting_is_applied(self):
+        app.state.config["smart_punctuation"] = True
+        api, _transcriptions, completions = self.make_api(completion="Xin chào.")
+
+        check_limits, paste_text = self.run_f8(api)
+
+        check_limits.assert_called_once_with(1.0, 2)
+        completions.create.assert_called_once()
+        paste_text.assert_called_once_with("Xin chào.")
 
 
 if __name__ == "__main__":

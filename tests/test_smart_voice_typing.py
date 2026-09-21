@@ -172,6 +172,7 @@ class SmartVoiceTypingTests(unittest.TestCase):
             mock.patch.object(app.pythoncom, "CoUninitialize"),
             mock.patch.object(app.pythoncom, "OleGetClipboard", return_value=old_clipboard),
             mock.patch.object(app.pythoncom, "OleSetClipboard") as restore_clipboard,
+            mock.patch.object(app.win32clipboard, "CountClipboardFormats", return_value=1),
             mock.patch.object(app.win32clipboard, "GetClipboardSequenceNumber", side_effect=[10, 11]),
             mock.patch.object(app.keyboard, "send"),
             mock.patch.object(app.pyperclip, "paste", return_value="đoạn được chọn"),
@@ -180,6 +181,28 @@ class SmartVoiceTypingTests(unittest.TestCase):
 
         self.assertEqual(selected, "đoạn được chọn")
         restore_clipboard.assert_called_once_with(old_clipboard)
+
+    def test_selected_text_restores_empty_clipboard(self):
+        with (
+            mock.patch.object(app.pythoncom, "CoInitialize"),
+            mock.patch.object(app.pythoncom, "CoUninitialize"),
+            mock.patch.object(app.pythoncom, "OleGetClipboard", return_value=None),
+            mock.patch.object(app.win32clipboard, "CountClipboardFormats", return_value=0),
+            mock.patch.object(app.win32clipboard, "GetClipboardSequenceNumber", side_effect=[20, 21]),
+            mock.patch.object(app.win32clipboard, "OpenClipboard"),
+            mock.patch.object(app.win32clipboard, "EmptyClipboard") as empty_clipboard,
+            mock.patch.object(app.win32clipboard, "CloseClipboard"),
+            mock.patch.object(app.keyboard, "send"),
+            mock.patch.object(app.pyperclip, "paste", return_value="đoạn được chọn"),
+        ):
+            app.get_selected_text()
+
+        empty_clipboard.assert_called_once()
+
+    def test_about_label_matches_qwen_model(self):
+        source = Path(app.__file__).read_text(encoding="utf-8")
+        self.assertIn("Powered by Groq, Whisper & Qwen", source)
+        self.assertNotIn("Powered by Whisper & Llama", source)
 
     def test_wait_for_hotkey_release(self):
         with mock.patch.object(app.keyboard, "is_pressed", side_effect=[True, False]):

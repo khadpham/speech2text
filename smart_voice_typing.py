@@ -1145,7 +1145,7 @@ class MainDashboard(tk.Toplevel):
         
         # App Info
         tk.Label(f_about, text="SMART VOICE AI ASSISTANT", font=('Segoe UI Variable Display', 18, 'bold'), fg='#89b4fa', bg='#1e1e2e').pack(pady=(10, 5))
-        tk.Label(f_about, text="Phiên bản 3.0.0 | Powered by Whisper & Llama", font=('Segoe UI', 10), fg='#a6adc8', bg='#1e1e2e').pack(pady=(0, 20))
+        tk.Label(f_about, text="Phiên bản 3.0.0 | Powered by Groq, Whisper & Qwen", font=('Segoe UI', 10), fg='#a6adc8', bg='#1e1e2e').pack(pady=(0, 20))
         
         # Guide
         f_guide = tk.LabelFrame(f_about, text=" Hướng Dẫn Sử Dụng Nhanh ", bg='#1e1e2e', fg='#a6adc8', font=('Segoe UI', 10, 'bold'), pady=10, padx=10)
@@ -1416,6 +1416,7 @@ def get_selected_text() -> str:
     """Đọc selection bằng clipboard OLE rồi khôi phục nguyên IDataObject cũ."""
     old_clipboard = None
     clipboard_changed = False
+    clipboard_was_empty = win32clipboard.CountClipboardFormats() == 0
     pythoncom.CoInitialize()
     try:
         try:
@@ -1442,6 +1443,17 @@ def get_selected_text() -> str:
                 pythoncom.OleSetClipboard(old_clipboard)
             except Exception:
                 logging.exception("Không thể khôi phục IDataObject clipboard sau Ctrl+C")
+        elif clipboard_changed and clipboard_was_empty:
+            try:
+                win32clipboard.OpenClipboard()
+                win32clipboard.EmptyClipboard()
+            except Exception:
+                logging.exception("Không thể khôi phục trạng thái clipboard rỗng")
+            finally:
+                try:
+                    win32clipboard.CloseClipboard()
+                except Exception:
+                    pass
         pythoncom.CoUninitialize()
 
 def process_llm_task(audio_data, selected_text: str = "", target_hwnd: Optional[int] = None):

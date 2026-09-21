@@ -30,6 +30,11 @@ Trong **Dashboard → CÀI ĐẶT**, F8 có ba cách xử lý:
 
 Nếu bật cả Dịch và Thêm dấu câu, ứng dụng ưu tiên Dịch để tránh hai lần AI viết lại cùng một kết quả.
 
+Ứng dụng nhập Unicode trực tiếp nên không thay đổi clipboard khi trả kết quả.
+Nếu bạn chuyển sang cửa sổ khác trong lúc API đang xử lý, kết quả không bị dán
+nhầm mà được giữ tại **Dashboard → Kết quả gần nhất**. Mỗi lần ghi mặc định tối
+đa 300 giây và đoạn không có giọng nói sẽ không được gửi lên API.
+
 Nếu thiếu API key, Dashboard sẽ tự mở. Nhập key tại **CÀI ĐẶT → API Groq** rồi bấm **LƯU TẤT CẢ THIẾT LẬP**.
 
 Ứng dụng lưu log chẩn đoán tại `%LOCALAPPDATA%\SmartVoiceAI\smart_voice_ai.log`.

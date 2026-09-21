@@ -19,7 +19,10 @@ from pathlib import Path
 from urllib.parse import quote_plus
 import pyperclip
 import time
-from groq import Groq
+from groq import (
+    Groq, APIConnectionError, APITimeoutError, AuthenticationError,
+    BadRequestError, NotFoundError, PermissionDeniedError, RateLimitError,
+)
 import threading
 import pystray
 from PIL import Image, ImageDraw
@@ -142,6 +145,35 @@ def log_message(message: str, level: int = logging.INFO) -> None:
             print(message)
     except (OSError, UnicodeError):
         pass
+
+
+def user_error_message(error: Exception, operation: str = "tác vụ") -> str:
+    """Chuyển exception kỹ thuật thành hướng dẫn ngắn, không lộ request của người dùng."""
+    if isinstance(error, AuthenticationError):
+        return "API KEY KHÔNG HỢP LỆ — MỞ DASHBOARD ĐỂ CẬP NHẬT"
+    if isinstance(error, PermissionDeniedError):
+        return "API KEY KHÔNG CÓ QUYỀN DÙNG MODEL NÀY"
+    if isinstance(error, RateLimitError):
+        return "ĐÃ CHẠM GIỚI HẠN GROQ — HÃY THỬ LẠI SAU"
+    if isinstance(error, APITimeoutError):
+        return "GROQ PHẢN HỒI QUÁ LÂU — KIỂM TRA MẠNG VÀ THỬ LẠI"
+    if isinstance(error, APIConnectionError):
+        return "KHÔNG KẾT NỐI ĐƯỢC GROQ — KIỂM TRA INTERNET"
+    if isinstance(error, (BadRequestError, NotFoundError)):
+        return "MODEL HOẶC CẤU HÌNH API KHÔNG HỢP LỆ"
+    if isinstance(error, sd.PortAudioError):
+        return "KHÔNG MỞ ĐƯỢC MICROPHONE — KIỂM TRA THIẾT BỊ VÀ QUYỀN WINDOWS"
+    return f"{operation.upper()} THẤT BẠI — XEM LOG CHẨN ĐOÁN"
+
+
+def report_error(context: str, error: Exception, operation: str, duration: float = 4.0) -> None:
+    status_code = getattr(error, "status_code", None)
+    suffix = f", HTTP {status_code}" if status_code else ""
+    log_message(f"{context}: {type(error).__name__}{suffix}", logging.ERROR)
+    if state.status_window:
+        state.status_window.show(f"⚠ {user_error_message(error, operation)}", "#ff4b4b")
+        state.status_window.hide_after(duration)
+    play_sound("error")
 
 
 def resource_path(name: str) -> Path:
@@ -653,6 +685,7 @@ class FloatingIndicator:
         self.window.attributes("-topmost", True)
         self.window.attributes("-alpha", 0.92) # Tăng nhẹ độ đậm để rõ nét hơn
         self.window.configure(bg='#121212') # Nền xám đen sâu
+        self.hide_after_id = None
         
         # Frame chính với viền mỏng tinh tế
         self.frame = tk.Frame(self.window, bg='#121212', highlightthickness=1, highlightbackground='#333333')
@@ -693,6 +726,12 @@ class FloatingIndicator:
 
     def show(self, text, color='#00c8ff'):
         def _update():
+            if self.hide_after_id is not None:
+                try:
+                    self.window.after_cancel(self.hide_after_id)
+                except tk.TclError:
+                    pass
+                self.hide_after_id = None
             self.label.config(text=text, fg=color)
             self.status_bar.config(bg=color)
             self.window.deiconify()
@@ -719,7 +758,25 @@ class FloatingIndicator:
         post_ui(_anim)
 
     def hide(self):
-        post_ui(self.window.withdraw)
+        def _hide():
+            # Một notice có thời hạn (lỗi/thành công) được ưu tiên hơn trạng thái idle.
+            if self.hide_after_id is not None:
+                return
+            self.window.withdraw()
+        post_ui(_hide)
+
+    def hide_after(self, seconds: float):
+        def _schedule():
+            if self.hide_after_id is not None:
+                try:
+                    self.window.after_cancel(self.hide_after_id)
+                except tk.TclError:
+                    pass
+            def _withdraw_notice():
+                self.hide_after_id = None
+                self.window.withdraw()
+            self.hide_after_id = self.window.after(max(1, int(seconds * 1000)), _withdraw_notice)
+        post_ui(_schedule)
 
 def update_status(mode: str, key_name: str = ""):
     """Cập nhật trạng thái hiển thị trên màn hình."""
@@ -1162,7 +1219,7 @@ def process_audio(audio_data, target_hwnd: Optional[int] = None):
     if not can_proceed:
         if state.status_window:
             state.status_window.show(f"⚠ {msg.upper()}", "#ff4b4b")
-            threading.Timer(3.0, state.status_window.hide).start()
+            state.status_window.hide_after(3.0)
         play_sound("error")
         return
 
@@ -1234,8 +1291,7 @@ def process_audio(audio_data, target_hwnd: Optional[int] = None):
                     raw_text = response.choices[0].message.content.strip()
                     record_usage(0.0, 1)
                 except Exception as e:
-                    logging.exception("Lỗi dịch")
-                    log_message(f"Lỗi Dịch: {e}", logging.ERROR)
+                    report_error("Dịch F8", e, "dịch")
             
             # Nếu không dịch, có thể chuẩn hóa viết hoa và dấu câu bằng model nhanh.
             elif smart_punctuation:
@@ -1257,8 +1313,7 @@ TUYỆT ĐỐI GIỮ NGUYÊN 100% TỪ VỰNG CỦA NGƯỜI DÙNG, không đư�
                     raw_text = response.choices[0].message.content.strip()
                     record_usage(0.0, 1)
                 except Exception as e:
-                    logging.exception("Lỗi Smart Punctuation")
-                    log_message(f"Lỗi Smart Punc: {e}", logging.ERROR)
+                    report_error("Thêm dấu câu F8", e, "thêm dấu câu")
 
             text = apply_glossary(raw_text)
             
@@ -1266,12 +1321,7 @@ TUYỆT ĐỐI GIỮ NGUYÊN 100% TỪ VỰNG CỦA NGƯỜI DÙNG, không đư�
             clipboard_manager.paste_text(text, target_hwnd)
             
     except Exception as e:
-        logging.exception("Lỗi chuyển giọng nói thành văn bản")
-        log_message(f"Lỗi Transcribe: {e}", logging.ERROR)
-        if state.status_window:
-            state.status_window.show("⚠ LỖI KẾT NỐI", "#ff4b4b")
-            threading.Timer(3.0, state.status_window.hide).start()
-        play_sound("error")
+        report_error("Chuyển giọng nói thành văn bản", e, "chuyển giọng nói")
     finally:
         update_status("idle")
         audio_buffer.close()
@@ -1319,7 +1369,7 @@ def process_llm_task(audio_data, selected_text: str = "", target_hwnd: Optional[
     if not can_proceed:
         if state.status_window:
             state.status_window.show(f"⚠ {msg.upper()}", "#ff4b4b")
-            threading.Timer(3.0, state.status_window.hide).start()
+            state.status_window.hide_after(3.0)
         play_sound("error")
         return
 
@@ -1407,7 +1457,7 @@ Nếu không, chỉ trả về văn bản hồi đáp thông thường."""
                 speak_text(action_result)
                 if state.status_window:
                     state.status_window.show(f"✔ {action_result.upper()}", "#4bb5ff")
-                    threading.Timer(2.5, state.status_window.hide).start()
+                    state.status_window.hide_after(2.5)
             else:
                 state.llm_history.append({"role": "user", "content": f"Yêu cầu trước: {user_input}"})
                 state.llm_history.append({"role": "assistant", "content": result_text})
@@ -1417,12 +1467,7 @@ Nếu không, chỉ trả về văn bản hồi đáp thông thường."""
                 speak_text(result_text)
             
     except Exception as e:
-        logging.exception("Lỗi tác vụ AI")
-        log_message(f"Lỗi LLM: {e}", logging.ERROR)
-        if state.status_window:
-            state.status_window.show("⚠ LỖI AI", "#ff4b4b")
-            threading.Timer(3.0, state.status_window.hide).start()
-        play_sound("error")
+        report_error("Tác vụ trợ lý AI", e, "AI")
     finally:
         update_status("idle")
         audio_buffer.close()
@@ -1488,7 +1533,11 @@ def native_hotkey_listener() -> None:
     registered_f8 = bool(user32.RegisterHotKey(None, 1, f8_modifiers, f8_key))
     registered_f9 = bool(user32.RegisterHotKey(None, 2, f9_modifiers, f9_key))
     if not registered_f8 or not registered_f9:
-        message = f"Không thể đăng ký hotkey {HOTKEY_F8}/{HOTKEY_F9}. Có thể ứng dụng khác đang sử dụng."
+        error_code = kernel32.GetLastError()
+        message = (
+            f"Không thể đăng ký hotkey {HOTKEY_F8}/{HOTKEY_F9} (Windows error {error_code}). "
+            "Hãy đóng ứng dụng đang dùng cùng tổ hợp hoặc đổi hotkey trong Dashboard."
+        )
         log_message(message, logging.ERROR)
         post_ui(messagebox.showerror, "Lỗi phím tắt", message)
     else:
@@ -1637,8 +1686,7 @@ def voice_listener():
                             break
                     state.is_recording = False
         except Exception as e:
-            logging.exception("Lỗi âm thanh")
-            log_message(f"Lỗi âm thanh: {e}", logging.ERROR)
+            report_error("Thu âm", e, "thu âm")
             state.is_recording = False
             
         play_sound("end")
@@ -1648,13 +1696,13 @@ def voice_listener():
                 f"■ ĐÃ DỪNG Ở GIỚI HẠN {max_recording_seconds:g} GIÂY",
                 "#f9e2af"
             )
-            threading.Timer(3.0, state.status_window.hide).start()
+            state.status_window.hide_after(3.0)
 
         if not detected_voice:
             active_chunks = []
             if state.status_window:
                 state.status_window.show("⚠ KHÔNG NGHE THẤY GIỌNG NÓI", "#ff4b4b")
-                threading.Timer(3.0, state.status_window.hide).start()
+                state.status_window.hide_after(3.0)
             log_message("Ghi âm: không phát hiện giọng nói, không gửi API.")
         
         if active_chunks:
@@ -1706,7 +1754,7 @@ def setup_tray():
         pystray.MenuItem(lambda item: "✓ Chế độ Rảnh tay" if state.hands_free_mode else "Chế độ Rảnh tay", toggle_mode),
         pystray.MenuItem(lambda item: f"{HOTKEY_F8.upper()}: Ghi âm → văn bản", lambda icon, item: None, enabled=False),
         pystray.MenuItem(lambda item: f"{HOTKEY_F9.upper()}: Trợ lý AI", lambda icon, item: None, enabled=False),
-        pystray.MenuItem("Bảng điều khiển (Dashboard)", lambda icon, item: state.root.after(0, show_dashboard) if state.root else None, default=True),
+        pystray.MenuItem("Bảng điều khiển (Dashboard)", lambda icon, item: post_ui(show_dashboard), default=True),
         pystray.MenuItem("Tải lại từ điển", reload_glossary_tray),
         pystray.MenuItem("Thoát", shutdown_app)
     )
@@ -1725,7 +1773,7 @@ def show_startup_state() -> None:
             f"✓ SẴN SÀNG\n{HOTKEY_F8.upper()}: nói → văn bản | {HOTKEY_F9.upper()}: AI",
             "#a6e3a1"
         )
-        threading.Timer(5.0, state.status_window.hide).start()
+        state.status_window.hide_after(5.0)
 
 
 def run_processing_task(worker, *args) -> None:
@@ -1739,8 +1787,13 @@ def run_processing_task(worker, *args) -> None:
 
 
 def shutdown_app(icon=None, item=None) -> None:
-    state.app_running = False
     state.is_recording = False
+    if state.root:
+        if threading.current_thread() is threading.main_thread():
+            state.root.quit()
+        else:
+            post_ui(state.root.quit)
+    state.app_running = False
     if state.hotkey_thread_id:
         ctypes.windll.user32.PostThreadMessageW(state.hotkey_thread_id, 0x0012, 0, 0)
     try:
@@ -1749,8 +1802,6 @@ def shutdown_app(icon=None, item=None) -> None:
         logging.exception("Không thể lưu quota khi thoát")
     if icon:
         icon.stop()
-    if state.root:
-        post_ui(state.root.quit)
 
 
 _single_instance_handle = None

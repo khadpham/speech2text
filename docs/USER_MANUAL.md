@@ -56,6 +56,12 @@ trong **Dashboard → Kết quả gần nhất**, nơi bạn có thể chủ đ�
 - **Ứng dụng yêu cầu API key:** mở Dashboard, nhập key và lưu lại.
 - **Không nhận mic:** kiểm tra microphone mặc định và quyền Microphone trong
   Windows Settings.
+- **API key không hợp lệ/không có quyền:** app sẽ nêu đúng nguyên nhân; mở
+  Dashboard để cập nhật key hoặc chọn model được cấp quyền.
+- **429/giới hạn Groq:** chờ theo hạn mức tài khoản rồi thử lại; app không coi
+  đây là lỗi microphone.
+- **Hotkey bị chiếm:** thông báo sẽ hiển thị Windows error và yêu cầu đóng ứng
+  dụng dùng cùng tổ hợp hoặc đổi hotkey.
 - **Kết quả chưa được dán:** không đổi cửa sổ khi ứng dụng đang xử lý. Cơ chế
   khóa đúng cửa sổ nhận kết quả nằm trong lộ trình sửa lỗi tiếp theo.
 - **Cần chẩn đoán:** xem `%LOCALAPPDATA%\SmartVoiceAI\smart_voice_ai.log`. Log mặc

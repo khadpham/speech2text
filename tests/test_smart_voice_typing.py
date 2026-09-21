@@ -1,4 +1,5 @@
 import copy
+import httpx
 import os
 import tempfile
 import unittest
@@ -168,6 +169,22 @@ class SmartVoiceTypingTests(unittest.TestCase):
     def test_wait_for_hotkey_release(self):
         with mock.patch.object(app.keyboard, "is_pressed", side_effect=[True, False]):
             self.assertTrue(app.wait_for_hotkey_release("ctrl+alt+f9", timeout=1.0))
+
+    def test_user_error_messages_are_actionable(self):
+        request = httpx.Request("POST", "https://api.groq.com/test")
+        auth_response = httpx.Response(401, request=request)
+        rate_response = httpx.Response(429, request=request)
+        auth_error = app.AuthenticationError("unauthorized", response=auth_response, body=None)
+        rate_error = app.RateLimitError("limited", response=rate_response, body=None)
+        network_error = app.APIConnectionError(request=request)
+
+        self.assertIn("API KEY", app.user_error_message(auth_error))
+        self.assertIn("GIỚI HẠN", app.user_error_message(rate_error))
+        self.assertIn("INTERNET", app.user_error_message(network_error))
+
+    def test_ui_does_not_use_background_threading_timers(self):
+        source = Path(app.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("threading.Timer", source)
 
 
 if __name__ == "__main__":
